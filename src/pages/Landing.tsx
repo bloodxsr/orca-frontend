@@ -497,7 +497,7 @@ Trace the vessel"
               <Logo showText={false} />
               
               <div className="flex flex-col gap-2">
-                <p className="text-[10px] font-bold tracking-[0.2em] uppercase text-white">Developed by Team Haven</p>
+                <p className="text-[10px] font-bold tracking-[0.2em] uppercase text-white">Developed by Team Skirmish</p>
                 <p className="text-xs text-[var(--color-muted)] tracking-widest font-mono">
                   BIVASH <span className="opacity-30 mx-2">|</span> AARAV <span className="opacity-30 mx-2">|</span> SHAGUN <span className="opacity-30 mx-2">|</span> ABHINAV <span className="opacity-30 mx-2">|</span> TANISHA <span className="opacity-30 mx-2">|</span> BHAVYA
                 </p>
