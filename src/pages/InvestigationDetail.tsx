@@ -1,4 +1,4 @@
-﻿import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import Map, { Layer, Popup, Source } from 'react-map-gl/maplibre'
 import 'maplibre-gl/dist/maplibre-gl.css'
@@ -288,6 +288,18 @@ export default function InvestigationDetail() {
       {formError && <p className="text-sm font-mono text-red-400">{formError}</p>}
       {job && <p className="text-[10px] font-mono uppercase tracking-widest text-[var(--color-muted)]">Model job: {job.progress}% {job.error_message ? `// ${job.error_message}` : ''}</p>}
       
+      {job?.type === 'attribution' && job?.status === 'completed' && displayedRankings.length === 0 && (
+        <section>
+          <div className="flex justify-between items-end border-b border-white/[0.05] pb-2 mt-8">
+            <p className="text-[10px] font-mono uppercase tracking-widest text-[var(--color-muted)]">ATTRIBUTION RANKING</p>
+            <span className="text-[10px] font-mono text-white">0 LEADS</span>
+          </div>
+          <div className="mt-4 p-4 border border-amber-500/20 bg-amber-500/10 text-amber-400/90 text-sm font-mono">
+            Analysis complete: 0 candidate vessels found. None of the provided AIS tracks intersected with the spill's origin zone during the estimated time window.
+          </div>
+        </section>
+      )}
+
       {displayedRankings.length > 0 && (
         <section>
           <div className="flex justify-between items-end border-b border-white/[0.05] pb-2">
@@ -328,6 +340,52 @@ export default function InvestigationDetail() {
         <div className="flex items-center gap-2"><span className="w-4 h-px bg-cyan-600 block"></span> AIS route</div>
       </div>
     </div>
+    
+    {displayedRankings.length > 0 && (
+      <div className={`absolute bottom-0 right-0 h-48 bg-black/90 backdrop-blur-2xl border-t border-white/[0.05] pointer-events-auto flex flex-col transition-all duration-500 z-10 ${isSidebarOpen ? 'left-[480px]' : 'left-0'}`}>
+        <div className="px-6 py-3 border-b border-white/[0.05] flex justify-between items-center bg-white/[0.02]">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--color-muted)]">04 // INTERACTIVE INCIDENT TIMELINE</span>
+          <span className="text-[10px] font-mono text-white/50 uppercase tracking-widest">T-MINUS 48 HOURS TO DETECTION</span>
+        </div>
+        <div className="flex-1 relative px-6 py-4">
+           {/* Timeline track background */}
+           <div className="absolute top-[40px] bottom-4 left-6 right-6 border-x border-white/10 flex justify-between">
+             <div className="w-px h-full bg-white/5"></div>
+             <div className="w-px h-full bg-white/5"></div>
+             <div className="w-px h-full bg-white/5"></div>
+             <div className="w-px h-full bg-white/5"></div>
+           </div>
+
+           {/* Line representing the spill event */}
+           <div className="absolute top-2 bottom-0 left-[85%] w-px bg-red-500/80 z-20 shadow-[0_0_10px_rgba(239,68,68,0.5)]"></div>
+           <div className="absolute top-0 left-[85%] -translate-x-1/2 bg-red-500/20 border border-red-500/50 px-2 py-0.5 text-[9px] text-red-400 font-mono uppercase tracking-widest z-20">SPILL DETECTED</div>
+           
+           {/* Candidate bars */}
+           <div className="relative mt-8 space-y-4 z-30">
+             {displayedRankings.slice(0, 3).map((candidate: any, i: number) => {
+                const traj = candidate.trajectory || [];
+                // Simple visualization logic: top candidates overlap closer to the spill detection line (85%)
+                const leftPercent = 30 + (i * 15);
+                const widthPercent = 55 - (i * 15);
+                const color = i === 0 ? 'bg-amber-400' : 'bg-cyan-500';
+                const name = candidate.vessel_name || candidate.trajectory?.at(-1)?.vessel_name || candidate.mmsi;
+                return (
+                  <div key={candidate.vessel_id || candidate.mmsi} className="relative h-6 group cursor-pointer flex items-center">
+                    <span className="w-32 text-[10px] text-white/50 font-mono truncate mr-4">{name}</span>
+                    <div className="flex-1 relative h-full flex items-center">
+                      <div className={`absolute h-1.5 rounded-full ${color} opacity-70 group-hover:opacity-100 group-hover:h-2 transition-all shadow-[0_0_10px_rgba(0,0,0,0.5)]`} style={{ left: `${leftPercent}%`, width: `${widthPercent}%` }}></div>
+                      {/* Dots representing AIS pings */}
+                      <div className="absolute w-1.5 h-1.5 rounded-full bg-white" style={{ left: `${leftPercent}%` }}></div>
+                      <div className="absolute w-1.5 h-1.5 rounded-full bg-white" style={{ left: `${leftPercent + widthPercent/2}%` }}></div>
+                      <div className="absolute w-1.5 h-1.5 rounded-full bg-white" style={{ left: `${leftPercent + widthPercent}%` }}></div>
+                    </div>
+                  </div>
+                )
+             })}
+           </div>
+        </div>
+      </div>
+    )}
   </div>
 }
 

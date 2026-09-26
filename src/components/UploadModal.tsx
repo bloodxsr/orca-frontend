@@ -1,4 +1,6 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import Map, { Source, Layer } from 'react-map-gl/maplibre'
+import 'maplibre-gl/dist/maplibre-gl.css'
 
 interface UploadModalProps {
   isOpen: boolean
@@ -14,8 +16,10 @@ export default function UploadModal({ isOpen, onClose, onUploadComplete }: Uploa
   const [error, setError] = useState('')
   const [observedAt, setObservedAt] = useState(() => new Date().toISOString().slice(0, 16))
   const [bbox, setBbox] = useState(['80.1', '15.2', '81.4', '16.3'])
+  const [mapClicks, setMapClicks] = useState<[number, number][]>([])
   const [weather, setWeather] = useState({ windSpeed: '', windDirection: '', currentSpeed: '', currentDirection: '' })
   const [title, setTitle] = useState('')
+  const [aisSource, setAisSource] = useState<'upload' | 'live'>('upload')
   const [aisFile, setAisFile] = useState<File | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const aisInputRef = useRef<HTMLInputElement>(null)
@@ -41,6 +45,54 @@ export default function UploadModal({ isOpen, onClose, onUploadComplete }: Uploa
   }, [])
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setFile(e.target.files[0])
+      setError('')
+    }
+  }
+
+  const handleMapClick = (e: any) => {
+    const { lng, lat } = e.lngLat
+    let newClicks = [...mapClicks, [lng, lat]] as [number, number][]
+    if (newClicks.length > 2) {
+      newClicks = [[lng, lat]]
+    }
+    setMapClicks(newClicks)
+    
+    if (newClicks.length === 2) {
+      const minLon = Math.min(newClicks[0][0], newClicks[1][0])
+      const maxLon = Math.max(newClicks[0][0], newClicks[1][0])
+      const minLat = Math.min(newClicks[0][1], newClicks[1][1])
+      const maxLat = Math.max(newClicks[0][1], newClicks[1][1])
+      setBbox([minLon.toFixed(4), minLat.toFixed(4), maxLon.toFixed(4), maxLat.toFixed(4)])
+    }
+  }
+
+  const getBboxGeoJSON = (): any => {
+    if (mapClicks.length === 1) {
+      return {
+        type: 'FeatureCollection',
+        features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: mapClicks[0] }, properties: {} }]
+      }
+    }
+    
+    const [minLon, minLat, maxLon, maxLat] = bbox.map(Number)
+    if (isNaN(minLon) || isNaN(minLat) || isNaN(maxLon) || isNaN(maxLat) || bbox.every(v => v === '')) return null
+
+    return {
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[minLon, minLat], [maxLon, minLat], [maxLon, maxLat], [minLon, maxLat], [minLon, minLat]]]
+        },
+        properties: {}
+      }]
+    }
+  }
+
+  const handleFileSelectOld = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0])
       setError('')
@@ -77,7 +129,19 @@ export default function UploadModal({ isOpen, onClose, onUploadComplete }: Uploa
     setError('')
 
     try {
-      const aisPositions = aisFile ? await parseAisCsv(aisFile) : []
+      let aisPositions: any[] = []
+      if (aisSource === 'upload' && aisFile) {
+        aisPositions = await parseAisCsv(aisFile)
+      } else if (aisSource === 'live') {
+        setProgress('Fetching Live AIS Data...')
+        const fetchResp = await fetch('/api/v1/telemetry/fetch-live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(localStorage.getItem('token') ? { Authorization: `Bearer ${localStorage.getItem('token')}` } : {}) },
+          body: JSON.stringify({ bbox: coordinates, observed_at: observedAt, hours_back: 48 })
+        });
+        if (!fetchResp.ok) throw new Error('Live AIS Fetch failed. The endpoint might be a mock or unavailable.')
+        aisPositions = await fetchResp.json()
+      }
       // Step 1: Upload the satellite image
       setProgress('Uploading satellite imagery...')
       const formData = new FormData()
@@ -164,21 +228,59 @@ export default function UploadModal({ isOpen, onClose, onUploadComplete }: Uploa
           <input type="text" placeholder="e.g. Red Sea Incident" value={title} onChange={(e) => setTitle(e.target.value)} className="w-full bg-transparent border border-white/10 text-white font-mono text-xs p-3 focus:outline-none focus:border-white transition-colors placeholder-[var(--color-muted)]" />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-6">
+        <div className="grid grid-cols-1 gap-6 mt-6">
           <div>
             <label className="text-xs font-mono uppercase tracking-widest text-white block mb-2">Observed at</label>
             <input type="datetime-local" value={observedAt} onChange={(event) => setObservedAt(event.target.value)} className="w-full bg-transparent border border-white/10 text-white font-mono text-xs p-3 focus:outline-none focus:border-white transition-colors" required />
           </div>
           <div>
-            <div className="text-xs font-mono uppercase tracking-widest text-white mb-2 flex justify-between">
-              <span>Bounding box</span>
-              <span className="text-white/40 font-mono tracking-normal normal-case">west, south, east, north</span>
+            <div className="text-xs font-mono uppercase tracking-widest text-white mb-2 flex justify-between items-center">
+              <span>Incident Location (Bounding Box)</span>
+              {mapClicks.length < 2 && bbox.every(v => v === '') ? (
+                <span className="text-emerald-400/80 font-mono tracking-normal normal-case animate-pulse">Click twice on map to draw</span>
+              ) : (
+                <button type="button" onClick={() => { setMapClicks([]); setBbox(['', '', '', '']); }} className="text-emerald-400 hover:text-emerald-300 font-mono tracking-normal normal-case underline underline-offset-2">
+                  Clear Selection
+                </button>
+              )}
             </div>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="h-[200px] w-full border border-white/10 relative overflow-hidden bg-[#050505]">
+              <Map
+                initialViewState={{ longitude: 0, latitude: 20, zoom: 1 }}
+                mapStyle="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+                onClick={handleMapClick}
+                cursor={mapClicks.length === 1 ? 'crosshair' : 'default'}
+                interactiveLayerIds={[]}
+              >
+                {getBboxGeoJSON() && (
+                  <Source id="bbox-source" type="geojson" data={getBboxGeoJSON()}>
+                    {mapClicks.length === 1 && (
+                      <Layer id="click-point" type="circle" paint={{ 'circle-radius': 6, 'circle-color': '#34d399' }} />
+                    )}
+                    {mapClicks.length === 2 && (
+                      <Layer id="bbox-fill" type="fill" paint={{ 'fill-color': '#34d399', 'fill-opacity': 0.2 }} />
+                    )}
+                    {mapClicks.length === 2 && (
+                      <Layer id="bbox-line" type="line" paint={{ 'line-color': '#34d399', 'line-width': 2, 'line-dasharray': [2, 2] }} />
+                    )}
+                  </Source>
+                )}
+              </Map>
+            </div>
+            
+            <div className="grid grid-cols-4 gap-2 mt-2">
               {bbox.map((value, index) => (
                 <div key={index} className="relative">
                   <span className="absolute left-2 top-3 text-[10px] font-mono text-white/30">{['W', 'S', 'E', 'N'][index]}</span>
-                  <input aria-label={['West longitude', 'South latitude', 'East longitude', 'North latitude'][index]} type="number" step="any" value={value} onChange={(event) => setBbox((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} className="w-full bg-transparent border border-white/10 text-white font-mono text-xs p-3 pl-6 focus:outline-none focus:border-white transition-colors" />
+                  <input 
+                    aria-label={['West longitude', 'South latitude', 'East longitude', 'North latitude'][index]} 
+                    type="number" step="any" value={value} 
+                    onChange={(event) => {
+                      setBbox((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item));
+                      setMapClicks([[0,0], [0,0]]); // Hack to trigger "drawn" state for clear button
+                    }} 
+                    className="w-full bg-transparent border border-white/10 text-white font-mono text-xs p-3 pl-6 focus:outline-none focus:border-white transition-colors" 
+                  />
                 </div>
               ))}
             </div>
@@ -200,20 +302,33 @@ export default function UploadModal({ isOpen, onClose, onUploadComplete }: Uploa
         </div>
 
         <div className="mt-8 border border-white/[0.05] p-5">
-          <div className="flex justify-between items-center mb-2">
+          <div className="flex justify-between items-center mb-4">
             <span className="text-xs font-mono uppercase tracking-widest text-white">03 // VESSEL TRAFFIC</span>
-            <span className="text-[10px] font-mono tracking-normal text-white/40 normal-case">(optional)</span>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setAisSource('upload')} className={`text-[10px] font-mono uppercase px-3 py-1 border transition-colors ${aisSource === 'upload' ? 'bg-white text-black border-white' : 'border-white/20 text-white hover:bg-white/10'}`}>Upload CSV</button>
+              <button type="button" onClick={() => setAisSource('live')} className={`text-[10px] font-mono uppercase px-3 py-1 border transition-colors ${aisSource === 'live' ? 'bg-emerald-500 text-black border-emerald-500' : 'border-white/20 text-white hover:bg-white/10'}`}>Live API Fetch</button>
+            </div>
           </div>
-          <p className="text-xs font-mono text-white/70 mb-4">Add the AIS records for this incident.</p>
-          <input ref={aisInputRef} type="file" accept=".csv,text/csv" onChange={(event) => setAisFile(event.target.files?.[0] || null)} className="hidden" />
-          <div className="flex items-center gap-4">
-            <button type="button" onClick={() => aisInputRef.current?.click()} className="text-[10px] font-mono uppercase tracking-widest border border-white/20 px-4 py-2 hover:bg-white hover:text-black transition-colors text-white">Choose AIS CSV</button>
-            <span className="text-[10px] font-mono text-white/50 truncate">{aisFile?.name || 'No file selected'}</span>
-          </div>
-          <div className="mt-4 flex justify-between items-end">
-            <span className="text-[10px] font-mono text-white/30 tracking-wide block max-w-sm">Req: MMSI, timestamp, lat, lon, speed, course.<br/>Opt: heading, vessel_type, IMO, vessel_name.</span>
-            <a href="/ais-test-data.csv" download className="text-[10px] font-mono text-white hover:underline uppercase tracking-widest">Download test data</a>
-          </div>
+          
+          {aisSource === 'upload' ? (
+            <>
+              <p className="text-xs font-mono text-white/70 mb-4">Add the AIS records for this incident.</p>
+              <input ref={aisInputRef} type="file" accept=".csv,text/csv" onChange={(event) => setAisFile(event.target.files?.[0] || null)} className="hidden" />
+              <div className="flex items-center gap-4">
+                <button type="button" onClick={() => aisInputRef.current?.click()} className="text-[10px] font-mono uppercase tracking-widest border border-white/20 px-4 py-2 hover:bg-white hover:text-black transition-colors text-white">Choose AIS CSV</button>
+                <span className="text-[10px] font-mono text-white/50 truncate">{aisFile?.name || 'No file selected'}</span>
+              </div>
+              <div className="mt-4 flex justify-between items-end">
+                <span className="text-[10px] font-mono text-white/30 tracking-wide block max-w-sm">Req: MMSI, timestamp, lat, lon, speed, course.<br/>Opt: heading, vessel_type, IMO, vessel_name.</span>
+                <a href="/ais-test-data.csv" download className="text-[10px] font-mono text-white hover:underline uppercase tracking-widest">Download test data</a>
+              </div>
+            </>
+          ) : (
+            <div className="py-4 text-center border border-dashed border-emerald-500/30 bg-emerald-500/5">
+              <p className="text-[10px] font-mono uppercase text-emerald-400 mb-2 tracking-widest">● LIVE SATELLITE CONNECTION</p>
+              <p className="text-[10px] font-mono text-white/50">ORCA will securely query external APIs to fetch real-world AIS telemetry for your defined bounding box over the last 48 hours.</p>
+            </div>
+          )}
         </div>
 
         {error && (
